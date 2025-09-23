@@ -1,5 +1,5 @@
 from typing import Annotated
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Response, Cookie
 from fastapi.exceptions import RequestValidationError
@@ -10,11 +10,13 @@ from pydantic import ValidationError
 
 from src.dependencies import get_db
 from src import schemas, models
+from src.core.config import REFRESH_TOKEN_ROTATION
 from src.core.hash import get_password_hash, verify_password
 from src.core.jwt import (
     create_token_pair,
-    refresh_token_state,
-    decode_access_token,
+    refresh_token_state_with_rotation,
+    refresh_token_state_without_rotation,
+    decode_token_with_blacklisted,
     mail_token,
     add_refresh_token_cookie,
     SUB,
@@ -88,16 +90,32 @@ async def login(
 
 
 @router.post("/refresh")
-async def refresh(refresh: Annotated[str | None, Cookie()] = None):
-    print(refresh)
+async def refresh(
+    response: Response,
+    refresh: Annotated[str | None, Cookie()] = None, 
+    db: AsyncSession = Depends(get_db),
+):
     if not refresh:
         raise BadRequestException(detail="refresh token required")
-    return refresh_token_state(token=refresh)
+    
+    # Without rotation refresh token does not renew
+    if not REFRESH_TOKEN_ROTATION:
+        return refresh_token_state_without_rotation(token=refresh)
+    
+    payload = await decode_token_with_blacklisted(token=refresh, db=db)
+    user = await models.User.find_by_id(db=db, id=payload[SUB])
+    
+    return await refresh_token_state_with_rotation(
+        response=response,
+        payload=payload,
+        user=user,
+        db=db,
+    )
 
 
 @router.get("/verify", response_model=schemas.SuccessResponseScheme)
 async def verify(token: str, db: AsyncSession = Depends(get_db)):
-    payload = await decode_access_token(token=token, db=db)
+    payload = await decode_token_with_blacklisted(token=token, db=db)
     user = await models.User.find_by_id(db=db, id=payload[SUB])
     if not user:
         raise NotFoundException(detail="User not found")
@@ -112,9 +130,9 @@ async def logout(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: AsyncSession = Depends(get_db),
 ):
-    payload = await decode_access_token(token=token, db=db)
+    payload = await decode_token_with_blacklisted(token=token, db=db)
     black_listed = models.BlackListToken(
-        id=payload[JTI], expire=datetime.utcfromtimestamp(payload[EXP])
+        id=payload[JTI], expire=datetime.fromtimestamp(payload['exp'], tz=timezone.utc)
     )
     await black_listed.save(db=db)
 
@@ -147,7 +165,7 @@ async def password_reset_token(
     data: schemas.PasswordResetSchema,
     db: AsyncSession = Depends(get_db),
 ):
-    payload = await decode_access_token(token=token, db=db)
+    payload = await decode_token_with_blacklisted(token=token, db=db)
     user = await models.User.find_by_id(db=db, id=payload[SUB])
     if not user:
         raise NotFoundException(detail="User not found")
@@ -164,7 +182,7 @@ async def password_update(
     data: schemas.PasswordUpdateSchema,
     db: AsyncSession = Depends(get_db),
 ):
-    payload = await decode_access_token(token=token, db=db)
+    payload = await decode_token_with_blacklisted(token=token, db=db)
     user = await models.User.find_by_id(db=db, id=payload[SUB])
     if not user:
         raise NotFoundException(detail="User not found")
@@ -186,7 +204,7 @@ async def articles(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: AsyncSession = Depends(get_db),
 ):
-    payload = await decode_access_token(token=token, db=db)
+    payload = await decode_token_with_blacklisted(token=token, db=db)
     user = await models.User.find_by_id(db=db, id=payload[SUB])
     if not user:
         raise NotFoundException(detail="User not found")
@@ -202,7 +220,7 @@ async def article_create(
     data: schemas.ArticleCreateSchema,
     db: AsyncSession = Depends(get_db),
 ):
-    payload = await decode_access_token(token=token, db=db)
+    payload = await decode_token_with_blacklisted(token=token, db=db)
     user = await models.User.find_by_id(db=db, id=payload[SUB])
     if not user:
         raise NotFoundException(detail="User not found")

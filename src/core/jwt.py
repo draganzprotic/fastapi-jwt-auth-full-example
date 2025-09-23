@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import config
 from src.schemas import User, TokenPair, JwtTokenSchema
 from src.exceptions import AuthFailedException
-from src.models import BlackListToken
+from src.models import BlackListToken, User as DBUser
 
 
 REFRESH_COOKIE_NAME = "refresh"
@@ -66,7 +66,7 @@ def create_token_pair(user: User) -> TokenPair:
     )
 
 
-async def decode_access_token(token: str, db: AsyncSession):
+async def decode_token_with_blacklisted(token: str, db: AsyncSession):
     try:
         payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
         black_list_token = await BlackListToken.find_by_id(db=db, id=payload[JTI])
@@ -78,11 +78,30 @@ async def decode_access_token(token: str, db: AsyncSession):
     return payload
 
 
-def refresh_token_state(token: str):
+async def refresh_token_state_with_rotation(
+    response: Response,
+    payload: dict,
+    user: DBUser,
+    db: AsyncSession
+):
+    exp = datetime.fromtimestamp(payload['exp'])
+    exp.replace(tzinfo=timezone.utc)
+    black_listed = BlackListToken(
+        id=payload[JTI], expire=exp,
+    )
+    await black_listed.save(db=db)
+
+    token_pair = create_token_pair(user=user)
+
+    add_refresh_token_cookie(response=response, token=token_pair.refresh.token)
+
+    return {"token": token_pair.access.token}
+
+def refresh_token_state_without_rotation(token: str):
     try:
         payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
     except JWTError as ex:
-        print(str(ex))
+        # print(str(ex))
         raise AuthFailedException()
 
     return {"token": _create_access_token(payload=payload).token}

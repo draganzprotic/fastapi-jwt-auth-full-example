@@ -9,7 +9,8 @@ if not SECRET_KEY:
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRES_MINUTES = 30
-REFRESH_TOKEN_EXPIRES_MINUTES = 15 * 24 * 60  # 15 days
+REFRESH_TOKEN_EXPIRES_MINUTES =  24 * 60  # 1 day
+REFRESH_TOKEN_ROTATION = True # If it is true it generates new refresh token when access token renew.
 
 
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "0.0.0.0")
