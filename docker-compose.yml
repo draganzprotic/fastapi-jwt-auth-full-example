@@ -1,23 +1,29 @@
-version: '3'
 services:
   postgres:
     container_name: postgres
     image: 'postgres:15'
     restart: always
+    environment:
+      # Mapiramo tvoje nazive iz .env na nazive koje Postgres image prepoznaje
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # Ovde takođe koristimo varijablu za korisnika kako bi healthcheck prošao
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
     ports:
       - '5432:5432'
-    env_file:
-      - ./.env
     volumes:
-      - './pgsql:/var/lib/postgresql/data'
+      - ./pgsql:/var/lib/postgresql/data
+      - './init-db.sh:/docker-entrypoint-initdb.d/init-db.sh'
+    env_file:
+      - .env
     networks:
       - default
-  
+
   backend:
     container_name: backend
     build:
@@ -28,8 +34,7 @@ services:
       - .env
     ports:
       - "3000:80"
-    links:
-      - postgres
+    # Napomena: 'links' je zastarela opcija, 'depends_on' je sasvim dovoljan
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,6 +45,3 @@ networks:
   default:
     driver: bridge
 
-volumes:
-  pgsql:
-    driver: local
